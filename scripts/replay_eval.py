@@ -47,8 +47,9 @@ def replay(items, timeout_ms):
     return [json.loads(line) for line in raw.splitlines() if line.strip() and json.loads(line).get("eventId") in wanted]
 
 
-def report(items, verdicts):
+def report(items, verdicts, label, baseline=None):
     by_id = {v.get("eventId"): v for v in verdicts}
+    print(f"run={label}")
     print(f"events={len(items)} verdicts={len(by_id)} missing={len(items) - len(by_id)}")
     for rule in RULES:
         tp = fp = fn = 0
@@ -64,6 +65,16 @@ def report(items, verdicts):
     print(f"clean_events={len(clean)} clean_false_positives={clean_fp}")
     modes = Counter(v.get("decidedBy", "MISSING") for v in by_id.values())
     print("modes=" + ",".join(f"{key}:{value}" for key, value in sorted(modes.items())))
+    changes = []
+    for item in items:
+        actual = by_id.get(item["eventId"], {}).get("verdict")
+        before = (baseline or {}).get(item["eventId"], {}).get("verdict")
+        expected = item.get("expected")
+        if actual and before and actual != before:
+            changes.append((item["eventId"], before, expected, actual, actual == expected))
+    print(f"verdict_changes={len(changes)}")
+    for event_id, before, expected, actual, correct in changes:
+        print(f"verdict_change eventId={event_id} rules={before} expected={expected} agent={actual} correct={str(correct).lower()}")
     latencies = sorted(v["latencyMs"] for v in by_id.values() if isinstance(v.get("latencyMs"), int))
     if latencies:
         p50 = latencies[(len(latencies) - 1) * 50 // 100]
@@ -79,6 +90,9 @@ def main():
     parser.add_argument("--split", choices=("DEV", "TEST", "REAL"), default="TEST")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--timeout-ms", type=int, default=15000)
+    parser.add_argument("--label", default="unknown", help="rules-only or agent run label")
+    parser.add_argument("--baseline", type=Path, help="JSON verdict map from the rules-only run")
+    parser.add_argument("--json-out", type=Path, help="write matched verdicts for later comparison")
     args = parser.parse_args()
     items = [x for x in load(args.corpus) if x["split"] == args.split]
     if not items:
@@ -89,7 +103,11 @@ def main():
         print("offline_fixture_rule_events=" + ",".join(f"{rule}:{sum(rule in x['rules'] for x in items)}" for rule in RULES))
         print("offline mode: no Kafka publish, no AWS calls")
         return
-    report(items, replay(items, args.timeout_ms))
+    verdicts = replay(items, args.timeout_ms)
+    if args.json_out:
+        args.json_out.write_text(json.dumps({v["eventId"]: v for v in verdicts}, indent=2) + "\n")
+    baseline = json.loads(args.baseline.read_text()) if args.baseline else None
+    report(items, verdicts, args.label, baseline)
 
 
 if __name__ == "__main__":

@@ -66,6 +66,17 @@ does not call AWS.
 See [`docs/ADR.md`](docs/ADR.md) for the rules/Kafka/idempotency/graph/
 modular-monolith decisions.
 
+## S3-lite local triage
+
+Analyzer enrichment uses the `TriageAgent` interface and local Ollama
+(`qwen3:8b`, temperature 0) through `OllamaTriageAgent`. Only a redacted
+subset of each event is sent. Enrichment runs for failing logs or WARN rules;
+timeouts and invalid responses preserve the rules verdict and use
+`RULES_FALLBACK`. A rules BLOCK cannot be lowered. Configure
+`SENTINEL_AGENT_URL`, `SENTINEL_AGENT_MODEL`, and `SENTINEL_AGENT_TIMEOUT`.
+The evaluation and its unavailable-container Ollama result are in
+[`eval/S3_LITE_REPORT.md`](eval/S3_LITE_REPORT.md).
+
 ## Limitations
 
 Evaluation N is small. Labels are author-built. Injected faults share the

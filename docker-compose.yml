@@ -33,7 +33,10 @@ services:
     environment:
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--Xmx256m}
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      SENTINEL_AGENT_URL: ${SENTINEL_AGENT_URL:-}
+      SENTINEL_AGENT_URL: ${SENTINEL_AGENT_URL-http://host.docker.internal:11434/api/chat}
+      SENTINEL_AGENT_MODEL: ${SENTINEL_AGENT_MODEL:-qwen3:8b}
     depends_on:
       kafka:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
