@@ -1,0 +1,10 @@
+services:
+  - name: api
+    paths: [src/main/java/com/releasesentinel/adapter/**]
+    dependsOn: [rules]
+  - name: rules
+    paths: [src/main/java/com/releasesentinel/rules/**]
+    dependsOn: [graph]
+  - name: graph
+    paths: [src/main/java/com/releasesentinel/graph/**]
+    dependsOn: []
