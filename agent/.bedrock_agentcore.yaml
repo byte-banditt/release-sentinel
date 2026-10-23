@@ -1,0 +1,16 @@
+default_agent: release-sentinel-agent
+agents:
+  release-sentinel-agent:
+    name: release-sentinel-agent
+    entrypoint: main.py
+    deployment_type: direct_code_deploy
+    source_path: .
+    runtime_type: PYTHON_3_12
+    aws:
+      region: null
+      account: null
+      execution_role_auto_create: true
+    bedrock_agentcore:
+      agent_id: null
+      agent_arn: null
+      agent_session_id: null
