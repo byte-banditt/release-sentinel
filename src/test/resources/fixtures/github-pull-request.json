@@ -1,0 +1,10 @@
+{
+  "id": "fixture-delivery",
+  "number": 42,
+  "repository": {"full_name": "acme/example"},
+  "pull_request": {"head": {"sha": "abc123"}},
+  "changed_files": [
+    {"path": "src/main/resources/application.yml", "status": "modified", "patch": "-feature.old: true\n+feature.new: true"}
+  ],
+  "log_excerpt": "fixture webhook"
+}
