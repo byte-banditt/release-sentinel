@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.releasesentinel.model.CiEvent;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Service;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.auth.signer.Aws4Signer;
 import software.amazon.awssdk.auth.signer.params.Aws4SignerParams;
@@ -23,8 +22,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-@Service
-public class AgentEnricher {
+/** Legacy AgentCore-compatible test adapter; production wiring uses OllamaTriageAgent. */
+public class AgentEnricher implements TriageAgent {
     private final ObjectMapper mapper;
     private final AgentMetrics metrics;
     private final HttpClient client;
@@ -41,7 +40,8 @@ public class AgentEnricher {
         this.client = HttpClient.newBuilder().connectTimeout(timeout).build();
     }
 
-    public boolean enabled() { return endpoint != null; }
+    @Override public boolean enabled() { return endpoint != null; }
+    @Override
     public AgentResult invoke(CiEvent event) throws Exception {
         if (endpoint == null) throw new IllegalStateException("agent endpoint is not configured");
         Map<String, Object> payload = new LinkedHashMap<>();
@@ -85,5 +85,5 @@ public class AgentEnricher {
         for (JsonNode line : root.path("evidenceLines")) { if (!line.isTextual()) throw new IllegalArgumentException("invalid agent evidenceLines"); evidence.add(line.textValue()); }
         return new AgentResult(root.path("classification").textValue(), root.path("rationale").textValue(), evidence);
     }
-    public void recordFallback() { metrics.recordFallback(); }
+    @Override public void recordFallback() { metrics.recordFallback(); }
 }

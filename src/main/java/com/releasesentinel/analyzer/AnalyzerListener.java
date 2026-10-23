@@ -25,15 +25,15 @@ public class AnalyzerListener {
     private final KafkaTemplate<String, String> kafka;
     private final List<Rule> rules;
     private final ServiceGraph graph;
-    private final AgentEnricher agent;
+    private final TriageAgent agent;
     private final ObservabilityMetrics metrics;
 
     @Autowired
-    public AnalyzerListener(ObjectMapper mapper, KafkaTemplate<String, String> kafka, List<Rule> rules, ServiceGraph graph, AgentEnricher agent, ObservabilityMetrics metrics) {
+    public AnalyzerListener(ObjectMapper mapper, KafkaTemplate<String, String> kafka, List<Rule> rules, ServiceGraph graph, TriageAgent agent, ObservabilityMetrics metrics) {
         this.mapper = mapper; this.kafka = kafka; this.rules = rules; this.graph = graph; this.agent = agent; this.metrics = metrics;
     }
 
-    public AnalyzerListener(ObjectMapper mapper, KafkaTemplate<String, String> kafka, List<Rule> rules, ServiceGraph graph, AgentEnricher agent) {
+    public AnalyzerListener(ObjectMapper mapper, KafkaTemplate<String, String> kafka, List<Rule> rules, ServiceGraph graph, TriageAgent agent) {
         this(mapper, kafka, rules, graph, agent,
                 new ObservabilityMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
     }

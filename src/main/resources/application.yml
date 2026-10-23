@@ -30,5 +30,6 @@ logging:
     level: "%5p [eventId:%X{eventId:-}]"
 sentinel:
   agent:
-    url: ${SENTINEL_AGENT_URL:}
+    url: ${SENTINEL_AGENT_URL:http://127.0.0.1:11434/api/chat}
+    model: ${SENTINEL_AGENT_MODEL:qwen3:8b}
     timeout: ${SENTINEL_AGENT_TIMEOUT:8s}
