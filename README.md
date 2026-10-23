@@ -29,4 +29,43 @@ Run tests with:
 ./mvnw test
 ```
 
+## S4 operations and evaluation
+
+The EC2 Compose profile runs this app and pinned single-node KRaft Kafka:
+
+```bash
+cp .env.example .env
+./scripts/deploy-ec2.sh
+```
+
+See [`docs/DEPLOY_EC2.md`](docs/DEPLOY_EC2.md) for deployment, smoke test,
+Kafka restart, DLT inspection, replay, and teardown. Actuator is bound to
+host loopback `127.0.0.1:8081/internal/actuator`; it is not a public route. The app puts
+`eventId` in logging MDC at ingest, analyze, and egress. Kafka client metrics,
+verdict latency histogram, agent fallback, egress retry, and DLT counters are
+available through Actuator.
+
+The corpus is [`corpus/labels.jsonl`](corpus/labels.jsonl). It contains 30
+injected events, 15 clean events, DEV/TEST splits, and per-event provenance.
+Rules were frozen at commit `833740a`; TEST events were created after that
+freeze. Replay/report:
+
+```bash
+python3 scripts/replay_eval.py --split TEST
+python3 scripts/replay_eval.py --offline --split TEST
+```
+
+CI runs unit tests, Testcontainers tests, and the fixed offline fixture. It
+does not call AWS.
+
+See [`docs/ADR.md`](docs/ADR.md) for the rules/Kafka/idempotency/graph/
+modular-monolith decisions.
+
+## Limitations
+
+Evaluation N is small. Labels are author-built. Injected faults share the
+author's assumptions. Kafka deployment is a single broker. The EC2 check is a
+smoke test only; it is not load or availability evidence. Real AgentCore
+deployment is manual and excluded from CI.
+
 Start the local single-node KRaft broker with `docker compose up -d`.
