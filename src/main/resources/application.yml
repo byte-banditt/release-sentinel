@@ -16,3 +16,7 @@ spring:
         isolation.level: read_committed
 server:
   port: ${SERVER_PORT:8080}
+sentinel:
+  agent:
+    url: ${SENTINEL_AGENT_URL:}
+    timeout: ${SENTINEL_AGENT_TIMEOUT:8s}

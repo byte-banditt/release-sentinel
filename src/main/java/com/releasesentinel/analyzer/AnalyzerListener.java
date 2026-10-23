@@ -21,9 +21,10 @@ public class AnalyzerListener {
     private final KafkaTemplate<String, String> kafka;
     private final List<Rule> rules;
     private final ServiceGraph graph;
+    private final AgentEnricher agent;
 
-    public AnalyzerListener(ObjectMapper mapper, KafkaTemplate<String, String> kafka, List<Rule> rules, ServiceGraph graph) {
-        this.mapper = mapper; this.kafka = kafka; this.rules = rules; this.graph = graph;
+    public AnalyzerListener(ObjectMapper mapper, KafkaTemplate<String, String> kafka, List<Rule> rules, ServiceGraph graph, AgentEnricher agent) {
+        this.mapper = mapper; this.kafka = kafka; this.rules = rules; this.graph = graph; this.agent = agent;
     }
 
     @KafkaListener(topics = KafkaTopics.EVENTS, groupId = "release-sentinel-analyzer", containerFactory = "ciEventsKafkaListenerContainerFactory")
@@ -33,8 +34,21 @@ public class AnalyzerListener {
         List<Finding> findings = new ArrayList<>();
         for (Rule rule : rules) findings.addAll(rule.evaluate(event));
         findings.addAll(graph.blastRadius(event));
+        boolean rulesWarn = findings.stream().anyMatch(f -> f.severity() == Severity.WARN);
+        boolean failingLog = event.logExcerpt() != null && event.logExcerpt().matches("(?is).*\\b(fail|failed|failure|error|exception|fatal)\\b.*");
+        DecidedBy decidedBy = DecidedBy.RULES;
+        if (agent.enabled() && (rulesWarn || failingLog)) {
+            try {
+                AgentResult result = agent.invoke(event);
+                if (!result.classification().equals("PASS")) findings.add(new Finding("AI_AGENT", result.classification().equals("BLOCK") ? Severity.BLOCK : Severity.WARN, "logExcerpt", result.rationale() + " | " + String.join("; ", result.evidenceLines())));
+                decidedBy = DecidedBy.RULES_AGENT;
+            } catch (Exception ignored) {
+                agent.recordFallback();
+                decidedBy = DecidedBy.RULES_FALLBACK;
+            }
+        }
         VerdictType type = findings.stream().anyMatch(f -> f.severity() == Severity.BLOCK) ? VerdictType.BLOCK : findings.isEmpty() ? VerdictType.PASS : VerdictType.WARN;
-        Verdict verdict = new Verdict(1, event.eventId(), type, findings, DecidedBy.RULES, (System.nanoTime() - started) / 1_000_000);
+        Verdict verdict = new Verdict(1, event.eventId(), type, findings, decidedBy, (System.nanoTime() - started) / 1_000_000);
         String rawVerdict = mapper.writeValueAsString(verdict);
         var record = new ProducerRecord<String, String>(KafkaTopics.VERDICTS, event.eventId(), rawVerdict);
         record.headers().add("X-Sentinel-Tenant", event.tenantId().getBytes(java.nio.charset.StandardCharsets.UTF_8));
