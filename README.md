@@ -1,89 +1,195 @@
-# release-sentinel
+# Release Sentinel
 
-Java 21, Spring Boot `4.1.1`, single Maven module. This is a plain library: adapters produce validated `CiEvent` records, rules produce findings, and `ServiceGraph` computes dependent blast radius.
+Release Sentinel is a Java 21 service that receives CI and pull-request
+events, evaluates release-risk rules, optionally enriches the result with a
+local or Amazon Bedrock AgentCore model, and delivers verdicts to tenant
+webhooks.
 
-`service-graph.yaml` is a declared graph, not an inferred graph. Ownership exists only where paths are explicitly declared. Graph traversal is cycle-safe BFS over declared `dependsOn` edges.
+It is a Spring Boot application backed by Apache Kafka. The core event model,
+adapters, rules, service graph, analyzer, and delivery components are kept in
+one Maven module.
 
-There is no database, Kafka, Spring application, or runtime service in S1. `GitHubAdapter` verifies `X-Hub-Signature-256` using constant-time comparison; `GenericJsonAdapter` accepts only schema-valid `CiEvent` JSON.
+## How it works
 
-## S2 pipeline
+```text
+GitHub / generic JSON
+          |
+          v
+  authenticated ingest
+          |
+          v
+       ci.events  --->  analyzer  --->  ci.verdicts  ---> tenant webhook
+          |                 |
+          v                 v
+    ci.events.dlq     rules + optional agent
+```
 
-The single Spring Boot app uses `ci.events` and `ci.verdicts` as seams. HTTP ingest returns `202` only after an `acks=all` broker acknowledgement; analyzer sends the verdict before acknowledging the event offset; malformed events recover to `ci.events.dlq`; egress uses Spring Kafka non-blocking retry topics and `ci.verdicts.DLT`.
+The pipeline is intentionally at-least-once. Ingest publishes only after an
+`acks=all` broker acknowledgement. The analyzer publishes a verdict before
+committing the consumed event offset. A crash between either operation can
+produce a duplicate; receivers must deduplicate using
+`X-Sentinel-Delivery-Id`.
 
-Delivery is at-least-once end to end. A crash after a publish and before an offset commit can duplicate a `CiEvent` or `Verdict`; the receiver deduplicates by `X-Sentinel-Delivery-Id`.
+The rules currently cover:
 
-Configure `SENTINEL_WEBHOOK_URL_<TENANT>` plus either `SENTINEL_WEBHOOK_SECRET_<TENANT>` or `SENTINEL_WEBHOOK_SECRET_FILE_<TENANT>`; values are never committed. `GITHUB_WEBHOOK_SECRET` authenticates GitHub input.
+- removed configuration keys;
+- dependency changes without an accompanying lockfile update;
+- migration changes without rollback evidence; and
+- deleted or weakened test coverage.
 
-### Threat model
+`service-graph.yaml` is an explicit dependency graph. Blast-radius traversal
+uses cycle-safe BFS and does not infer ownership from repository layout.
 
-Signing proves the body was produced by a holder of the shared secret.
-The delivery id lets receivers reject duplicate effects after retries or crashes.
-The timestamp limits replay of an otherwise valid signed request to 5 minutes.
-Signing does not provide confidentiality; use TLS for confidentiality in transit.
-The secret is symmetric and must be protected by both parties.
-Signing is not asymmetric identity, authorization, or sender compromise protection.
+## Requirements
 
-Run tests with:
+- Java 21
+- Docker Engine and Docker Compose plugin for Kafka or EC2 deployment
+- Python 3.10+ only for the evaluation and AgentCore runtime tooling
+
+## Build and test
+
+Run the unit and integration test suite:
 
 ```bash
 ./mvnw test
 ```
 
-## S4 operations and evaluation
-
-The EC2 Compose profile runs this app and pinned single-node KRaft Kafka:
+The Kafka integration test uses Testcontainers and is skipped when Docker is
+unavailable. Build the runnable jar with:
 
 ```bash
-cp .env.example .env
+./mvnw package
+```
+
+## Run locally
+
+Start the single-node Kafka profile:
+
+```bash
+docker compose --profile ec2 up -d kafka
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092 GITHUB_WEBHOOK_SECRET=dev-secret ./mvnw spring-boot:run
+```
+
+The application listens on `http://localhost:8080`. Management endpoints are
+on `http://localhost:8081/internal/actuator`.
+
+Submit a validated generic event:
+
+```bash
+curl -i -X POST http://localhost:8080/events \
+  -H 'content-type: application/json' \
+  --data '{"schemaVersion":1,"eventId":"local-1","tenantId":"demo","source":"generic","repo":"demo/repo","prNumber":1,"commitSha":"local","changedFiles":[],"logExcerpt":"build passed","receivedAt":"2026-01-01T00:00:00Z"}'
+```
+
+Successful ingest returns `202 Accepted` after the event is published.
+
+## HTTP endpoints
+
+| Endpoint | Purpose | Authentication |
+| --- | --- | --- |
+| `POST /events` | Accept a schema-valid generic `CiEvent` JSON body | Configure network access appropriately |
+| `POST /webhook/github` | Accept a GitHub-shaped payload | `X-Hub-Signature-256` HMAC and `GITHUB_WEBHOOK_SECRET` |
+| `GET /internal/actuator/health` | Health check | Keep management port private |
+| `GET /internal/actuator/metrics` | Metrics | Keep management port private |
+
+GitHub requests may also provide `X-Tenant-Id` and use
+`X-GitHub-Delivery` as the event id. GitHub signature comparison is
+constant-time. TLS is still required for confidentiality because HMAC signing
+does not encrypt the request.
+
+## Configuration
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka broker address |
+| `SERVER_PORT` | `8080` | Public application port |
+| `MANAGEMENT_SERVER_PORT` | `8081` | Actuator port |
+| `MANAGEMENT_SERVER_ADDRESS` | `0.0.0.0` | Actuator bind address; restrict it at deployment |
+| `GITHUB_WEBHOOK_SECRET` | none | Required GitHub HMAC secret |
+| `SENTINEL_AGENT_URL` | `http://127.0.0.1:11434/api/chat` | Ollama-compatible chat endpoint |
+| `SENTINEL_AGENT_MODEL` | `qwen3:8b` | Local triage model |
+| `SENTINEL_AGENT_TIMEOUT` | `8s` | Agent request timeout |
+| `SENTINEL_WEBHOOK_URL_<TENANT>` | none | Required verdict destination |
+| `SENTINEL_WEBHOOK_SECRET_<TENANT>` | none | Verdict signing secret |
+| `SENTINEL_WEBHOOK_SECRET_FILE_<TENANT>` | none | Alternative secret-file location |
+
+Tenant ids are normalized to uppercase environment-variable suffixes. For
+example, tenant `acme-prod` uses `SENTINEL_WEBHOOK_URL_ACME_PROD`.
+
+Secrets must be supplied through the runtime environment or a protected secret
+file. Do not commit them.
+
+## Optional agent enrichment
+
+The Java analyzer calls the configured `TriageAgent` for failing logs or WARN
+rules. It sends only a redacted event subset. Agent timeouts and invalid
+responses preserve the rules verdict and mark the decision as
+`RULES_FALLBACK`; an agent cannot lower a rules-derived `BLOCK`.
+
+The `agent/` directory contains a stateless Amazon Bedrock AgentCore runtime.
+It validates model output as `PASS`, `WARN`, or `BLOCK`, redacts token,
+secret, password, authorization, JWT, and AWS-key patterns, and treats CI
+text as untrusted data. Deployment is manual:
+
+```bash
+cd agent
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+export AWS_REGION=us-east-1
+export BEDROCK_MODEL_ID=<model-id>
+./deploy-real-runtime.sh
+```
+
+Review the AWS budget, model-access, IAM, and regional pricing requirements in
+[`agent/README.md`](agent/README.md) before deploying.
+
+## EC2 deployment
+
+The `ec2` Compose profile runs the application with a pinned single-node KRaft
+Kafka broker. Create a protected `.env` file with deployment-specific values,
+then run:
+
+```bash
+chmod 600 .env
 ./scripts/deploy-ec2.sh
 ```
 
-See [`docs/DEPLOY_EC2.md`](docs/DEPLOY_EC2.md) for deployment, smoke test,
-Kafka restart, DLT inspection, replay, and teardown. Actuator is bound to
-host loopback `127.0.0.1:8081/internal/actuator`; it is not a public route. The app puts
-`eventId` in logging MDC at ingest, analyze, and egress. Kafka client metrics,
-verdict latency histogram, agent fallback, egress retry, and DLT counters are
-available through Actuator.
+The complete smoke test, recovery commands, Kafka DLT inspection, and teardown
+procedure are in [`docs/DEPLOY_EC2.md`](docs/DEPLOY_EC2.md). The deployment is
+single-broker and is not high-availability evidence.
 
-The corpus is [`corpus/labels.jsonl`](corpus/labels.jsonl). It contains the
-unchanged 30 injected DEV/TEST events plus a `REAL` split mined from actual
-commit history. REAL events carry `provenance=REAL`, `sourceRepo`, and
-`sourceCommit`; labels come from reading the actual parent-to-commit diff, not
-from running the rules. The available histories yielded 6 faulty and 6 clean
-REAL events, below the requested 10/10 target. See
-[`eval/REAL_REPORT.md`](eval/REAL_REPORT.md).
-Rules were frozen at commit `833740a`; TEST events were created after that
-freeze. Replay/report:
+## Evaluation
+
+Replay the frozen fixture corpus with:
 
 ```bash
 python3 scripts/replay_eval.py --split TEST
 python3 scripts/replay_eval.py --offline --split TEST
 ```
 
-CI runs unit tests, Testcontainers tests, and the fixed offline fixture. It
-does not call AWS.
+Reports and corpus details:
 
-See [`docs/ADR.md`](docs/ADR.md) for the rules/Kafka/idempotency/graph/
-modular-monolith decisions.
+- [`eval/TEST_REPORT.md`](eval/TEST_REPORT.md)
+- [`eval/REAL_REPORT.md`](eval/REAL_REPORT.md)
+- [`eval/S3_LITE_REPORT.md`](eval/S3_LITE_REPORT.md)
+- [`corpus/labels.jsonl`](corpus/labels.jsonl)
 
-## S3-lite local triage
+The corpus is small and partly author-built. The available repository history
+did not provide the requested 10 faulty and 10 clean REAL events, so evaluation
+results are directional rather than production-quality accuracy evidence.
 
-Analyzer enrichment uses the `TriageAgent` interface and local Ollama
-(`qwen3:8b`, temperature 0) through `OllamaTriageAgent`. Only a redacted
-subset of each event is sent. Enrichment runs for failing logs or WARN rules;
-timeouts and invalid responses preserve the rules verdict and use
-`RULES_FALLBACK`. A rules BLOCK cannot be lowered. Configure
-`SENTINEL_AGENT_URL`, `SENTINEL_AGENT_MODEL`, and `SENTINEL_AGENT_TIMEOUT`.
-The evaluation and its unavailable-container Ollama result are in
-[`eval/S3_LITE_REPORT.md`](eval/S3_LITE_REPORT.md).
+## Repository guide
 
-## Limitations
+- `src/main/java/com/releasesentinel/adapter` — GitHub and generic event adapters
+- `src/main/java/com/releasesentinel/rules` — deterministic risk rules
+- `src/main/java/com/releasesentinel/analyzer` — rules and optional agent analysis
+- `src/main/java/com/releasesentinel/ingest` — HTTP ingest and Kafka publishing
+- `src/main/java/com/releasesentinel/egress` — signed, retried webhook delivery
+- `src/main/java/com/releasesentinel/graph` — declared dependency graph traversal
+- `agent/` — optional Bedrock AgentCore runtime
+- `docs/` — architecture and deployment records
+- `scripts/` — deployment, corpus, and evaluation utilities
 
-Evaluation N is small. Labels are author-built. Injected faults share the
-author's assumptions. REAL history was insufficient for 10 faulty and 10 clean
-events; REAL rule misses and false positives remain uncorrected. Kafka
-deployment is a single broker. The EC2 check is a smoke test only; it is not
-load or availability evidence. Real AgentCore deployment is manual and
-excluded from CI.
-
-Start the local single-node KRaft broker with `docker compose up -d`.
+See [`docs/ADR.md`](docs/ADR.md) for the decisions behind the rules, Kafka
+boundaries, idempotency, graph, and modular-monolith design.
