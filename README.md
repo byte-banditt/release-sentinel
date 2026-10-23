@@ -45,8 +45,13 @@ host loopback `127.0.0.1:8081/internal/actuator`; it is not a public route. The 
 verdict latency histogram, agent fallback, egress retry, and DLT counters are
 available through Actuator.
 
-The corpus is [`corpus/labels.jsonl`](corpus/labels.jsonl). It contains 30
-injected events, 15 clean events, DEV/TEST splits, and per-event provenance.
+The corpus is [`corpus/labels.jsonl`](corpus/labels.jsonl). It contains the
+unchanged 30 injected DEV/TEST events plus a `REAL` split mined from actual
+commit history. REAL events carry `provenance=REAL`, `sourceRepo`, and
+`sourceCommit`; labels come from reading the actual parent-to-commit diff, not
+from running the rules. The available histories yielded 6 faulty and 6 clean
+REAL events, below the requested 10/10 target. See
+[`eval/REAL_REPORT.md`](eval/REAL_REPORT.md).
 Rules were frozen at commit `833740a`; TEST events were created after that
 freeze. Replay/report:
 
@@ -64,8 +69,10 @@ modular-monolith decisions.
 ## Limitations
 
 Evaluation N is small. Labels are author-built. Injected faults share the
-author's assumptions. Kafka deployment is a single broker. The EC2 check is a
-smoke test only; it is not load or availability evidence. Real AgentCore
-deployment is manual and excluded from CI.
+author's assumptions. REAL history was insufficient for 10 faulty and 10 clean
+events; REAL rule misses and false positives remain uncorrected. Kafka
+deployment is a single broker. The EC2 check is a smoke test only; it is not
+load or availability evidence. Real AgentCore deployment is manual and
+excluded from CI.
 
 Start the local single-node KRaft broker with `docker compose up -d`.
