@@ -76,7 +76,7 @@ def report(items, verdicts):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--corpus", default="corpus/labels.jsonl", type=Path)
-    parser.add_argument("--split", choices=("DEV", "TEST"), default="TEST")
+    parser.add_argument("--split", choices=("DEV", "TEST", "REAL"), default="TEST")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--timeout-ms", type=int, default=15000)
     args = parser.parse_args()
