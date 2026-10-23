@@ -7,6 +7,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
+import com.releasesentinel.EventContext;
 
 @RestController
 public class WebhookController {
@@ -17,13 +18,15 @@ public class WebhookController {
 
     @PostMapping("/webhook/github")
     ResponseEntity<Void> github(@RequestBody String body, @RequestHeader HttpHeaders headers) {
-        publisher.publish(github.adapt(body, headers.toSingleValueMap()));
+        var event = github.adapt(body, headers.toSingleValueMap());
+        try (var ignored = EventContext.open(event.eventId())) { publisher.publish(event); }
         return ResponseEntity.accepted().build();
     }
 
     @PostMapping("/events")
     ResponseEntity<Void> generic(@RequestBody String body) {
-        publisher.publish(generic.adapt(body, new HashMap<>()));
+        var event = generic.adapt(body, new HashMap<>());
+        try (var ignored = EventContext.open(event.eventId())) { publisher.publish(event); }
         return ResponseEntity.accepted().build();
     }
 }
