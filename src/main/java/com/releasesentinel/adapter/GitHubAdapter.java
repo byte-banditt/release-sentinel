@@ -26,9 +26,17 @@ public final class GitHubAdapter implements SourceAdapter {
 
     @Override
     public CiEvent adapt(String rawInput, Map<String, String> headers) {
-        verifySignature(rawInput, headers == null ? Map.of() : headers);
+        headers = headers == null ? Map.of() : headers;
+        verifySignature(rawInput, headers);
         try {
             JsonNode root = mapper.readTree(rawInput);
+            String githubEvent = headers.get("X-GitHub-Event");
+            if (githubEvent != null && !githubEvent.equals("pull_request")) throw new IllegalArgumentException("unsupported GitHub event");
+            String action = root.path("action").asText("");
+            if (githubEvent != null && action.isBlank()) throw new IllegalArgumentException("pull_request action is required");
+            if (!action.isBlank() && !List.of("opened", "synchronize", "reopened", "ready_for_review").contains(action)) {
+                throw new IllegalArgumentException("unsupported pull_request action");
+            }
             JsonNode pull = root.path("pull_request");
             List<ChangedFile> files = new ArrayList<>();
             for (JsonNode file : root.path("changed_files")) {
@@ -38,6 +46,7 @@ public final class GitHubAdapter implements SourceAdapter {
             String tenant = headers.getOrDefault("X-Tenant-Id", repo.contains("/") ? repo.substring(0, repo.indexOf('/')) : repo);
             String eventId = headers.getOrDefault("X-GitHub-Delivery", root.path("id").asText());
             if (eventId.isBlank()) throw new IllegalArgumentException("GitHub delivery id is required");
+            if (!eventId.matches("[A-Za-z0-9-]{1,128}")) throw new IllegalArgumentException("invalid GitHub delivery id");
             return new CiEvent(1, eventId, tenant, "github", repo, root.path("number").asInt(pull.path("number").asInt()),
                     pull.path("head").path("sha").asText(), files, root.path("log_excerpt").asText(""), Instant.now());
         } catch (Exception e) {

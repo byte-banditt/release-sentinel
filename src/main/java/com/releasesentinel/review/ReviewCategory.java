@@ -1,0 +1,5 @@
+package com.releasesentinel.review;
+
+public enum ReviewCategory {
+    CORRECTNESS, RELIABILITY, SECURITY, AUTHORIZATION, TRANSACTION, API_COMPATIBILITY, PERFORMANCE, TEST_COVERAGE
+}

@@ -3,6 +3,9 @@ package com.releasesentinel;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.releasesentinel.model.CiEvent;
 import com.releasesentinel.testsupport.ReferenceReceiver;
+import com.releasesentinel.review.*;
+import com.releasesentinel.ingest.CiEventOutbox;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -17,6 +20,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 import org.testcontainers.containers.wait.strategy.Wait;
+import org.testcontainers.containers.PostgreSQLContainer;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -50,13 +54,20 @@ class KafkaPipelineTest {
             .withEnv("KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR", "1")
             .withEnv("KAFKA_TRANSACTION_STATE_LOG_MIN_ISR", "1")
             .waitingFor(Wait.forListeningPort());
+    @Container static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>(DockerImageName.parse("postgres:17-alpine"));
     static ReferenceReceiver receiver;
     @Autowired KafkaTemplate<String, String> producer;
     @Autowired ObjectMapper mapper;
+    @Autowired ReviewStore reviewStore;
+    @Autowired CiEventOutbox outbox;
+    @Autowired JdbcTemplate jdbc;
 
     @DynamicPropertySource static void properties(DynamicPropertyRegistry registry) {
         try { receiver = new ReferenceReceiver("secret", 0); } catch (Exception e) { throw new IllegalStateException(e); }
         registry.add("spring.kafka.bootstrap-servers", () -> "localhost:19092");
+        registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
+        registry.add("spring.datasource.username", POSTGRES::getUsername);
+        registry.add("spring.datasource.password", POSTGRES::getPassword);
         registry.add("SENTINEL_WEBHOOK_URL_ACME", receiver::url);
         registry.add("SENTINEL_WEBHOOK_SECRET_ACME", () -> "secret");
     }
@@ -85,6 +96,40 @@ class KafkaPipelineTest {
         receiver.failNext(100); publish("permanent", "valid");
         assertNotNull(await(KafkaTopics.VERDICTS + ".DLT", "permanent"));
         receiver.failNext(0);
+    }
+
+    @Test @Order(7) void reviewApprovalBindingAndCiResultSurviveDatabaseStateTransitions() {
+        UUID reviewId = UUID.randomUUID();
+        String sha = "a".repeat(40);
+        var suggestion = new TestSuggestion(null, "GENERATED", "Boundary", "Service#run", "null input", "guards null", "throws",
+                "src/main/java/Service.java", 10, "JUNIT5", "src/test/java/ServiceTest.java",
+                "import org.junit.jupiter.api.Test; class ServiceTest { @Test void x() {} }", List.of("assumes JUnit 5"), null, null, null);
+        var review = new PullRequestReview(reviewId, "acme", "acme/repo", 5, "b".repeat(40), sha, "title", "body",
+                "REVIEW_FINDINGS", "summary", "WARN", List.of(), List.of(suggestion), Instant.now());
+        var persisted = reviewStore.save(review);
+        assertEquals(reviewId, reviewStore.get("acme", reviewId).orElseThrow().reviewId());
+        assertTrue(reviewStore.get("other", reviewId).isEmpty());
+        UUID suggestionId = persisted.testSuggestions().getFirst().suggestionId();
+        reviewStore.decide("acme", "alice", suggestionId, true, "approved by reviewer");
+        reviewStore.bind("acme", reviewId, sha, List.of(suggestionId));
+        var result = new ReviewStore.CiResult(987654321L, reviewId, "acme/repo", 5, sha,
+                "https://github.com/acme/repo/actions/runs/987654321", "success", 3, 0, 0, "maven-test",
+                "Release Sentinel Tests", ".github/workflows/release-sentinel-tests.yml", "success", Instant.now());
+        reviewStore.report("acme", result);
+        reviewStore.report("acme", result);
+        assertEquals("VALIDATED", reviewStore.get("acme", reviewId).orElseThrow().testSuggestions().getFirst().status());
+        assertEquals(1, reviewStore.results("acme", reviewId).size());
+        assertThrows(RuntimeException.class, () -> reviewStore.bind("acme", reviewId, "c".repeat(40), List.of(suggestionId)));
+    }
+
+    @Test @Order(8) void webhookOutboxDeduplicatesDeliveryAndRetainsAtLeastOnceReceipt() {
+        String body = "{\"delivery\":\"outbox-fixture\"}";
+        String sha = "d".repeat(40);
+        var event = new CiEvent(1, "outbox-fixture", "acme", "generic", "acme/repo", 8, sha, List.of(), "", Instant.now());
+        outbox.accept(event, body);
+        outbox.accept(event, body);
+        assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM github_deliveries WHERE tenant_id='acme' AND delivery_id='outbox-fixture' AND state='DELIVERED'", Integer.class));
+        assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM ci_event_outbox WHERE tenant_id='acme' AND delivery_id='outbox-fixture'", Integer.class));
     }
 
     @Test @Order(4) void malformedEventReachesEventsDlq() throws Exception {

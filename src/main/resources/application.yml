@@ -1,4 +1,12 @@
 spring:
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/release_sentinel}
+    username: ${DATABASE_USER:sentinel}
+    password: ${DATABASE_PASSWORD:sentinel-local-only}
+    hikari:
+      maximum-pool-size: ${DATABASE_POOL_SIZE:5}
+  flyway:
+    enabled: true
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     producer:
@@ -29,6 +37,14 @@ logging:
   pattern:
     level: "%5p [eventId:%X{eventId:-}]"
 sentinel:
+  review:
+    api-tokens: ${SENTINEL_API_TOKENS:{}}
+    ci-tokens: ${SENTINEL_CI_TOKENS:{}}
+  github:
+    token: ${GITHUB_READ_TOKEN:}
+    max-files: ${GITHUB_MAX_PR_FILES:200}
+    max-diff-chars: ${GITHUB_MAX_DIFF_CHARS:500000}
+    max-webhook-bytes: ${GITHUB_MAX_WEBHOOK_BYTES:1048576}
   agent:
     url: ${SENTINEL_AGENT_URL:http://127.0.0.1:11434/api/chat}
     model: ${SENTINEL_AGENT_MODEL:qwen3:8b}

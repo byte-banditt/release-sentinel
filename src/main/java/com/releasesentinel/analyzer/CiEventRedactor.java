@@ -16,6 +16,9 @@ public final class CiEventRedactor {
     private static final Pattern BEARER = Pattern.compile("(?i)\\bBearer\\s+[A-Za-z0-9._~+/=-]+");
     private static final Pattern JWT = Pattern.compile("\\beyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\b");
     private static final Pattern AWS_KEY = Pattern.compile("\\bAKIA[0-9A-Z]{16}\\b");
+    private static final Pattern PRIVATE_KEY = Pattern.compile("(?s)-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----.*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----");
+    private static final Pattern GITHUB_TOKEN = Pattern.compile("\\bgh[pousr]_[A-Za-z0-9_]{20,}\\b");
+    private static final Pattern SLACK_TOKEN = Pattern.compile("\\bxox[baprs]-[A-Za-z0-9-]{10,}\\b");
 
     private CiEventRedactor() {}
 
@@ -26,7 +29,12 @@ public final class CiEventRedactor {
         result.put("commitSha", event.commitSha());
         List<Map<String, String>> files = new ArrayList<>();
         for (ChangedFile file : event.changedFiles()) {
-            files.add(Map.of("path", redact(file.path()), "status", redact(file.status()), "patch", redact(file.patch())));
+            Map<String, String> safeFile = new LinkedHashMap<>();
+            safeFile.put("path", redact(file.path()));
+            safeFile.put("status", redact(file.status()));
+            safeFile.put("patch", redact(file.patch()));
+            if (file.previousPath() != null) safeFile.put("previousPath", redact(file.previousPath()));
+            files.add(safeFile);
         }
         result.put("changedFiles", files);
         result.put("logExcerpt", redact(event.logExcerpt()));
@@ -38,6 +46,9 @@ public final class CiEventRedactor {
         String safe = ASSIGNMENT.matcher(value).replaceAll("$1$2<REDACTED>");
         safe = BEARER.matcher(safe).replaceAll("Bearer <REDACTED>");
         safe = JWT.matcher(safe).replaceAll("<REDACTED_JWT>");
-        return AWS_KEY.matcher(safe).replaceAll("<REDACTED_AWS_KEY>");
+        safe = AWS_KEY.matcher(safe).replaceAll("<REDACTED_AWS_KEY>");
+        safe = GITHUB_TOKEN.matcher(safe).replaceAll("<REDACTED_GITHUB_TOKEN>");
+        safe = SLACK_TOKEN.matcher(safe).replaceAll("<REDACTED_SLACK_TOKEN>");
+        return PRIVATE_KEY.matcher(safe).replaceAll("<REDACTED_PRIVATE_KEY>");
     }
 }

@@ -1,4 +1,21 @@
 services:
+  postgres:
+    profiles: [ec2]
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: release_sentinel
+      POSTGRES_USER: sentinel
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?Set DATABASE_PASSWORD}
+    ports:
+      - "127.0.0.1:${DATABASE_PORT:-5432}:5432"
+    volumes:
+      - sentinel-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentinel -d release_sentinel"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
   kafka:
     profiles: [ec2]
     image: apache/kafka:4.2.1
@@ -33,10 +50,23 @@ services:
     environment:
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--Xmx256m}
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      DATABASE_URL: jdbc:postgresql://postgres:5432/release_sentinel
+      DATABASE_USER: sentinel
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:?Set DATABASE_PASSWORD}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?Set GITHUB_WEBHOOK_SECRET}
+      GITHUB_READ_TOKEN: ${GITHUB_READ_TOKEN:-}
+      SENTINEL_API_TOKENS: '${SENTINEL_API_TOKENS:-{}}'
+      SENTINEL_CI_TOKENS: '${SENTINEL_CI_TOKENS:-{}}'
       SENTINEL_AGENT_URL: ${SENTINEL_AGENT_URL-http://host.docker.internal:11434/api/chat}
       SENTINEL_AGENT_MODEL: ${SENTINEL_AGENT_MODEL:-qwen3:8b}
+      SENTINEL_REVIEW_URL: ${SENTINEL_REVIEW_URL:-http://host.docker.internal:11434/api/chat}
+      SENTINEL_REVIEW_MODEL: ${SENTINEL_REVIEW_MODEL:-qwen3:8b}
     depends_on:
       kafka:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
+volumes:
+  sentinel-postgres:

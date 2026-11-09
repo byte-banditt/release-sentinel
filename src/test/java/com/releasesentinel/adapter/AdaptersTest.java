@@ -7,6 +7,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.util.HexFormat;
 import java.util.Map;
+import com.releasesentinel.model.ChangedFile;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AdaptersTest {
@@ -24,5 +25,27 @@ class AdaptersTest {
         assertEquals("github", event.source());
         assertEquals("src/main/resources/application.yml", event.changedFiles().getFirst().path());
         assertThrows(SecurityException.class, () -> new GitHubAdapter(new ObjectMapper(), "secret").adapt(body, Map.of("X-Hub-Signature-256", "sha256=" + "0".repeat(64))));
+    }
+
+    @Test void githubAcceptsOnlySupportedPullRequestActionsWhenEventHeaderIsPresent() throws Exception {
+        String body = "{\"action\":\"synchronize\",\"number\":7,\"repository\":{\"full_name\":\"acme/repo\"},\"pull_request\":{\"head\":{\"sha\":\"abc\"}}}";
+        var mac = Mac.getInstance("HmacSHA256");
+        mac.init(new SecretKeySpec("secret".getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+        String sig = "sha256=" + HexFormat.of().formatHex(mac.doFinal(body.getBytes(StandardCharsets.UTF_8)));
+        var headers = Map.of("X-Hub-Signature-256", sig, "X-GitHub-Event", "pull_request", "X-GitHub-Delivery", "delivery-1");
+        assertEquals("abc", new GitHubAdapter(new ObjectMapper(), "secret").adapt(body, headers).commitSha());
+        String unsupported = body.replace("synchronize", "labeled");
+        String badSig = "sha256=" + HexFormat.of().formatHex(mac.doFinal(unsupported.getBytes(StandardCharsets.UTF_8)));
+        var badHeaders = Map.of("X-Hub-Signature-256", badSig, "X-GitHub-Event", "pull_request", "X-GitHub-Delivery", "delivery-2");
+        assertThrows(IllegalArgumentException.class, () -> new GitHubAdapter(new ObjectMapper(), "secret").adapt(unsupported, badHeaders));
+    }
+
+    @Test void githubPathsRejectTraversalAndAllowRenamedFiles() {
+        GitHubPullRequestFiles.validatePath("src/new-name.java");
+        assertThrows(IllegalArgumentException.class, () -> GitHubPullRequestFiles.validatePath("src/../../secret"));
+        assertThrows(IllegalArgumentException.class, () -> GitHubPullRequestFiles.validatePath("/etc/passwd"));
+        var renamed = new ChangedFile("src/new.java", "RENAMED", "", "src/old.java");
+        assertEquals("RENAMED", renamed.status());
+        assertEquals("src/old.java", renamed.previousPath());
     }
 }
